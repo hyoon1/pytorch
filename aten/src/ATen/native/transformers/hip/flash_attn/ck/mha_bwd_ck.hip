@@ -6,6 +6,7 @@
 #include <mha_bwd.h>
 #include <fmha_bwd.hpp>
 #include <mask.hpp>
+#include <variant>
 
 namespace pytorch_flash {
 
@@ -31,6 +32,7 @@ fmha_bwd_traits get_ck_fmha_bwd_traits(const mask_info &mask,
 
 
 
+#ifdef PYTORCH_USE_CK_FLASH_ATTENTION_V3
 aiter::mha_bwd_traits get_mha_bwd_traits(fmha_bwd_traits t, mask_info mask)
 {
     return aiter::mha_bwd_traits(t.hdim_q,
@@ -48,6 +50,7 @@ aiter::mha_bwd_traits get_mha_bwd_traits(fmha_bwd_traits t, mask_info mask)
                           1);                    // how_v3_bf16_cvt
 
 }
+#endif
 
 fmha_bwd_args get_ck_fmha_bwd_args(const mask_info &mask,
                                    // sizes
@@ -160,6 +163,10 @@ fmha_bwd_args get_ck_fmha_bwd_args(const mask_info &mask,
 
     float p_undrop = 1.0 - p_dropout;
 
+    auto drop_seed_offset_variant =
+        std::variant<std::pair<uint64_t, uint64_t>, std::pair<const void*, const void*>>(
+            std::pair<const void*, const void*>{drop_seed_offset.first, drop_seed_offset.second});
+
     return fmha_bwd_args{q.data_ptr(),
                          k.data_ptr(),
                          v.data_ptr(),
@@ -176,7 +183,10 @@ fmha_bwd_args get_ck_fmha_bwd_args(const mask_info &mask,
                          dq_acc.data_ptr(),         // dq_acc
                          nullptr,                   // seqstart_q
                          nullptr,                   // seqstart_k
+                         nullptr,                   // seqlen_q_ptr
                          nullptr,                   // seqlen_k_ptr
+                         nullptr,                   // cu_seqlen_q_ptr
+                         nullptr,                   // cu_seqlen_k_ptr
                          seqlen_q,
                          seqlen_k,
                          b,
@@ -231,7 +241,7 @@ fmha_bwd_args get_ck_fmha_bwd_args(const mask_info &mask,
                          static_cast<ck_tile::index_t>(mask.type),
                          p_dropout,
                          p_undrop,
-                         drop_seed_offset};
+                         drop_seed_offset_variant};
 }
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 mha_bwd_ck(const at::Tensor &dout,                   // batch_size x seqlen_q x num_heads, x head_size_og
@@ -425,6 +435,7 @@ mha_bwd_ck(const at::Tensor &dout,                   // batch_size x seqlen_q x 
                 p_dropout,
                 drop_seed_offset);
 
+#ifdef PYTORCH_USE_CK_FLASH_ATTENTION_V3
         float t = aiter::mha_bwd(args,
                                  stream_config,
                                  q_dtype_str,
@@ -435,10 +446,19 @@ mha_bwd_ck(const at::Tensor &dout,                   // batch_size x seqlen_q x 
                                  false,             // is_store_randval
                                  deterministic,
                                  true,              // use_ext_asm
-                                 true,             // is_v3_atomic_fp32
+                                 true,              // is_v3_atomic_fp32
                                  1);                // how_v3_bf16_cvt
-
-
+#else
+        auto traits =
+            get_ck_fmha_bwd_traits(mask,
+                                   q_dtype_str,
+                                   head_size_8x,
+                                   is_dropout,
+                                   attn_bias_.has_value(),
+                                   deterministic,
+                                   bias_requires_grad);
+        float t = fmha_bwd(traits, args, stream_config);
+#endif
 
 
         TORCH_CHECK(t >= 0, "invalid argument for fmha_bwd");

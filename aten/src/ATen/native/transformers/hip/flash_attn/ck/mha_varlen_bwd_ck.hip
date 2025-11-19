@@ -5,6 +5,7 @@
 #include <ATen/native/transformers/hip/flash_attn/flash_common_hip.hpp>
 #include <fmha_bwd.hpp>
 #include <mask.hpp>
+#include <variant>
 
 
 namespace pytorch_flash {
@@ -148,6 +149,10 @@ fmha_bwd_args get_ck_fmha_varlen_bwd_args(const mask_info &mask,
         batch_stride_dbias = dbias.stride(0);
     }
 
+    auto drop_seed_offset_variant =
+        std::variant<std::pair<uint64_t, uint64_t>, std::pair<const void*, const void*>>(
+            std::pair<const void*, const void*>{drop_seed_offset.first, drop_seed_offset.second});
+
     return fmha_bwd_args{q.data_ptr(),
                          k.data_ptr(),
                          v.data_ptr(),
@@ -164,7 +169,10 @@ fmha_bwd_args get_ck_fmha_varlen_bwd_args(const mask_info &mask,
                          dq_acc.data_ptr(), // dq_acc
                          seqlens_q.data_ptr(), // seqstart_q
                          seqlens_k.data_ptr(), // seqstart_k
-                         nullptr, // seqlen_k_ptr
+                         nullptr,              // seqlen_q_ptr
+                         nullptr,              // seqlen_k_ptr
+                         nullptr,              // cu_seqlen_q_ptr
+                         nullptr,              // cu_seqlen_k_ptr
                          total_q,
                          total_k,
                          b,
@@ -219,7 +227,7 @@ fmha_bwd_args get_ck_fmha_varlen_bwd_args(const mask_info &mask,
                          static_cast<ck_tile::index_t>(mask.type),
                          p_dropout,
                          p_undrop,
-                         drop_seed_offset};
+                         drop_seed_offset_variant};
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
