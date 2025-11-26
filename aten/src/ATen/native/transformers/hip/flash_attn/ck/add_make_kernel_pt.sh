@@ -21,9 +21,11 @@ while IFS= read -r file; do
     if [ -f "$file" ]; then
         # Use sed to replace "make_kernel" with "make_kernel_pt" in place
         sed -i 's/make_kernel/make_kernel_pt/g' "$file"
-        sed -i 's/make_kernel_pt<kBlockPerCu, ck_tile::gfx[0-9a-z_]*>/make_kernel_pt<k_::kBlockSize, kBlockPerCu>/g' "$file"
         sed -i 's/\#include \"fmha_fwd.hpp\"/\#include \"fmha_fwd.hpp\"\n\#include \"launch_kernel_pt.hpp\"/g' "$file"
         sed -i 's/\#include \"fmha_bwd.hpp\"/\#include \"fmha_bwd.hpp\"\n\#include \"launch_kernel_pt.hpp\"/g' "$file"
+        if grep -q '__gfx12__' "$file"; then
+            sed -i 's/defined(__gfx12__)/defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__)/g' "$file"
+        fi
         echo "Updated: $file"
     else
         echo "Skipping: $file (not found)"

@@ -7,39 +7,32 @@
 #include <c10/macros/Macros.h>
 
 namespace ck_tile {
-// Added by hipification to become a no-op on non supported architectures
-template <int MaxThreadPerBlock, int MinBlockPerCu, typename Kernel, typename... Args>
-#if CK_TILE_USE_LAUNCH_BOUNDS
-__launch_bounds__(MaxThreadPerBlock, MinBlockPerCu)
-#endif
-    __global__ void kentry_pt(Args... args)
-{
+template <typename KernelImpl>
+struct guarded_kernel_pt {
+    static constexpr int kBlockSize      = KernelImpl::kBlockSize;
+    static constexpr index_t kBlockPerCu = KernelImpl::kBlockPerCu;
+
+    template <typename... Args>
+    CK_TILE_DEVICE void operator()(Args... args) const
+    {
 #if (defined(__gfx90a__) || defined(__gfx942__) || defined(__gfx950__) || defined(__gfx1200__) || defined(__gfx1201__))
-    Kernel{}(args...);
+        KernelImpl{}(args...);
 #else
-    CUDA_KERNEL_ASSERT(false && "Fatal! Attempting to call a CK SDPA kernel on unsupported hardware");
+        CUDA_KERNEL_ASSERT(false && "Fatal! Attempting to call a CK SDPA kernel on unsupported hardware");
 #endif
-}
+    }
+};
 
-
-// Pytorch specific version
-// return a anonymous functor(lambda) to be called later
-// the KernelImpl should be a class without non-static data member, or let's say
-// can be instantiate with "KernelImpl{}"
-//
-// the "static __device__ operator()(some_arg)" is the entry point of KernelImpl
-//
-template <int MaxThreadPerBlock = CK_TILE_MAX_THREAD_PER_BLOCK,
-          int MinBlockPerCu     = CK_TILE_MIN_BLOCK_PER_CU,
+// PyTorch specific wrapper that keeps CK's kernel selection logic but adds the
+// runtime guard above so we fail loudly on unsupported hardware.
+template <int MinBlockPerCu = CK_TILE_MIN_BLOCK_PER_CU,
+          typename Arch      = void,
           typename KernelImpl,
           typename... Args>
 CK_TILE_HOST auto
 make_kernel_pt(KernelImpl /*f*/, dim3 grid_dim, dim3 block_dim, std::size_t lds_byte, Args... args)
 {
-    const auto kernel = kentry_pt<MaxThreadPerBlock, MinBlockPerCu, KernelImpl, Args...>;
-
-    return [=](const stream_config& s) {
-        kernel<<<grid_dim, block_dim, lds_byte, s.stream_id_>>>(args...);
-    };
+    using GuardedKernel = guarded_kernel_pt<KernelImpl>;
+    return make_kernel<MinBlockPerCu, Arch>(GuardedKernel{}, grid_dim, block_dim, lds_byte, args...);
 }
 } // namespace ck_tile
