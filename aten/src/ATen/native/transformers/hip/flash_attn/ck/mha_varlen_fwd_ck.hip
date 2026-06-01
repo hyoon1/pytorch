@@ -3,6 +3,7 @@
  ******************************************************************************/
 
 #include <ATen/native/transformers/hip/flash_attn/flash_common_hip.hpp>
+#include <ATen/native/transformers/hip/flash_attn/ck/mha_fwd_head_grouping_utils.h>
 #include <fmha_fwd.hpp>
 #include <mask.hpp>
 
@@ -57,7 +58,7 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
     // o: (total_q, nheads, d)
 
     // attn_bias :(batch, nheads, max_seqlen_q, max_seqlen_k)
-    // lse: (batch, nheads, max_seqlen_q)
+    // lse: (nheads, total_q)
     // randval: (nheads, total_q, max_seqlen_k)
 
     ck_tile::index_t total_q = q.size(0);
@@ -73,7 +74,7 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
     ck_tile::index_t nhead_stride_k = k.stride(1);
     ck_tile::index_t nhead_stride_v = v.stride(1);
     ck_tile::index_t nhead_stride_o = out.stride(1);
-    ck_tile::index_t nhead_stride_lse = has_lse ? softmax_lse.stride(1) : 0;
+    ck_tile::index_t nhead_stride_lse = has_lse ? softmax_lse.stride(0) : 0;
     ck_tile::index_t nhead_stride_randval = has_dropout_randval ? dropout_randval.stride(0) : 0;
 
     ck_tile::index_t batch_stride_q = 0;
@@ -81,7 +82,7 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
     ck_tile::index_t batch_stride_v = 0;
     ck_tile::index_t batch_stride_o = 0;
 
-    ck_tile::index_t batch_stride_lse = has_lse ? softmax_lse.stride(0) : 0;
+    ck_tile::index_t batch_stride_lse = 0;
     ck_tile::index_t batch_stride_randval = 0;
 
     void *attn_bias_ptr = nullptr;
@@ -101,19 +102,22 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
                          k.data_ptr(),
                          v.data_ptr(),
                          attn_bias_ptr, // bias
-                         nullptr, // q_descale_ptr
-                         nullptr, // k_descale_ptr
-                         nullptr, // v_descale_ptr
+                         nullptr,       // q_descale_ptr
+                         nullptr,       // k_descale_ptr
+                         nullptr,       // v_descale_ptr
                          has_dropout_randval ? dropout_randval.data_ptr() : nullptr,
                          has_lse ? softmax_lse.data_ptr() : nullptr,
                          out.data_ptr(),
                          seqlens_q.data_ptr(), // seqstart_q
                          seqlens_k.data_ptr(), // seqstart_k
-                         nullptr, // seqlen_q_ptr
-                         nullptr, // seqlen_k_ptr
-                         nullptr, // cu_seqlen_q_ptr
-                         nullptr, // cu_seqlen_k_ptr
-                         nullptr, // sink_ptr
+                         nullptr,              // seqlen_q_ptr
+                         nullptr,              // seqlen_k_ptr
+                         nullptr,              // cu_seqlen_q_ptr
+                         nullptr,              // cu_seqlen_k_ptr
+                         nullptr,              // block_scale_seqstart_q_ptr
+                         nullptr,              // block_scale_seqstart_k_ptr
+                         nullptr,              // seqstart_v_scale_ptr
+                         nullptr,              // sink_ptr
                          total_q,
                          total_k,
                          b,
@@ -122,6 +126,8 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
                          d,             // hdim_v
                          h,             // nhead
                          h_k,           // nhead_k
+                         0,             // num_head_q_total
+                         0,             // head_start
                          softmax_scale, // scale_s
                          0.0f,          // logits_soft_cap
                          stride_q,
@@ -130,6 +136,9 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
                          stride_attn_bias,
                          stride_randval,
                          stride_o,
+                         0, // stride_q_descale
+                         0, // stride_k_descale
+                         0, // stride_v_descale
                          nhead_stride_q,
                          nhead_stride_k,
                          nhead_stride_v,
@@ -137,6 +146,9 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
                          nhead_stride_randval,
                          nhead_stride_lse,
                          nhead_stride_o,
+                         0, // nhead_stride_q_descale
+                         0, // nhead_stride_k_descale
+                         0, // nhead_stride_v_descale
                          batch_stride_q,
                          batch_stride_k,
                          batch_stride_v,
@@ -144,14 +156,19 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
                          batch_stride_randval,
                          batch_stride_lse,
                          batch_stride_o,
+                         0, // batch_stride_q_descale
+                         0, // batch_stride_k_descale
+                         0, // batch_stride_v_descale
                          mask.left,
                          mask.right,
-                         0,             // sink_size
+                         0, // sink_size
                          static_cast<ck_tile::index_t>(mask.type),
-                         -1,                                // min_seqlen_q
+                         0, // min_seqlen_q
                          p_dropout,
                          has_dropout_randval,
-                         drop_seed_offset};
+                         drop_seed_offset,
+                         0,  // block_scale_size_q
+                         0}; // block_scale_size_kv
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
@@ -287,7 +304,7 @@ mha_varlen_fwd_ck(const at::Tensor &q,                   // total_q x num_heads 
 
     at::Tensor softmax_lse;
     // TODO - check gradient, only training require lse
-    softmax_lse = at::empty({batch_size, num_heads, max_seqlen_q}, opts.dtype(at::kFloat));
+    softmax_lse = at::empty({num_heads, total_q}, opts.dtype(at::kFloat));
 
     at::Tensor p;
     if (return_dropout_randval) {
@@ -354,7 +371,25 @@ mha_varlen_fwd_ck(const at::Tensor &q,                   // total_q x num_heads 
                 softmax_scale,
                 p_dropout,
                 drop_seed_offset);
-        float t = fmha_fwd(traits, args, stream_config);
+        float t = maybe_dispatch_head_grouped_fwd(
+            stream_config,
+            traits,
+            args,
+            num_heads,
+            num_heads_k,
+            batch_size,
+            max_seqlen_k,
+            head_size_8x,
+            head_size_8x,
+            k.element_size(),
+            v.element_size(),
+            q.scalar_type(),
+            [&](const auto& grouped_traits, auto& grouped_args, const auto& grouped_sc) {
+                return fmha_fwd(grouped_traits, grouped_args, grouped_sc);
+            });
+        if (t < 0.0f) {
+            t = fmha_fwd(traits, args, stream_config);
+        }
         TORCH_CHECK(t >= 0, "invalid argument for fmha_fwd");
     }
     else {

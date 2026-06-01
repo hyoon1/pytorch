@@ -14,7 +14,8 @@ __launch_bounds__(Kernel::kBlockSize, MinBlockPerCu)
 #endif
     __global__ void kentry_pt(Args... args)
 {
-#if (defined(__gfx90a__) || defined(__gfx942__) || defined(__gfx950__))
+#if (defined(__gfx90a__) || defined(__gfx942__) || defined(__gfx950__) || \
+     defined(__gfx11__) || defined(__gfx12__))
     Kernel{}(args...);
 #else
     CUDA_KERNEL_ASSERT(false && "Fatal! Attempting to call a CK SDPA kernel on unsupported hardware");
@@ -27,7 +28,8 @@ __launch_bounds__(Kernel::kBlockSize, MinBlockPerCu)
 #endif
     __global__ void kentry_pt(Args... args)
 {
-#if (defined(__gfx90a__) || defined(__gfx942__) || defined(__gfx950__))
+#if (defined(__gfx90a__) || defined(__gfx942__) || defined(__gfx950__) || \
+     defined(__gfx11__) || defined(__gfx12__))
     Kernel{}(args...);
 #else
     CUDA_KERNEL_ASSERT(false && "Fatal! Attempting to call a CK SDPA kernel on unsupported hardware");
