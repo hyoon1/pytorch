@@ -19,6 +19,37 @@ T = typing.TypeVar("T")
 
 
 class TestCMake(unittest.TestCase):
+    def test_ck_sdpa_runtime_arch_guard_supports_gfx11_gfx12(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        context_h = (repo_root / "aten/src/ATen/Context.h").read_text()
+        context_cpp = (repo_root / "aten/src/ATen/Context.cpp").read_text()
+
+        self.assertIn("static bool ckSDPASupported();", context_h)
+
+        blas_guard = context_cpp[
+            context_cpp.index("bool Context::ckSupported()"):
+            context_cpp.index("bool Context::ckSDPASupported()")
+        ]
+        sdpa_guard = context_cpp[
+            context_cpp.index("bool Context::ckSDPASupported()"):
+            context_cpp.index("void Context::setBlasPreferredBackend")
+        ]
+
+        self.assertIn('"gfx90a", "gfx942", "gfx950"', blas_guard)
+        self.assertNotIn('"gfx11"', blas_guard)
+        self.assertNotIn('"gfx12"', blas_guard)
+
+        self.assertIn('"gfx90a", "gfx942", "gfx950", "gfx11", "gfx12"', sdpa_guard)
+
+        rocm_fa_preference = context_cpp[
+            context_cpp.index("at::ROCmFABackend Context::getROCmFAPreferredBackend()"):
+            context_cpp.index(
+                "CuBLASReductionOption Context::allowFP16ReductionCuBLAS()"
+            )
+        ]
+        self.assertIn("ckSDPASupported()", rocm_fa_preference)
+        self.assertNotIn("ckSupportedFlag = ckSupported()", rocm_fa_preference)
+
     def test_ck_sdpa_fav3_is_arch_gated(self) -> None:
         cmake = (
             Path(__file__).resolve().parents[2]

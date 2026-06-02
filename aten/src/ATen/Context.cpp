@@ -528,6 +528,24 @@ bool Context::ckSupported() {
 #endif
 }
 
+bool Context::ckSDPASupported() {
+#ifdef USE_ROCM
+  static const std::vector<std::string> supported_archs = {
+    "gfx90a", "gfx942", "gfx950", "gfx11", "gfx12"
+  };
+  for (auto index : c10::irange(detail::getCUDAHooks().deviceCount())) {
+    if(!detail::getCUDAHooks().isGPUArch(supported_archs, index)) {
+      TORCH_WARN_ONCE(
+        "Attempting to use CK SDPA on an unsupported architecture! Cannot set backend to CK");
+      return false;
+    }
+  }
+  return true;
+#else
+  return false;
+#endif
+}
+
 void Context::setBlasPreferredBackend(at::BlasBackend b) {
 #ifdef _MSC_VER
   TORCH_WARN_ONCE(
@@ -568,11 +586,11 @@ at::ROCmFABackend Context::getROCmFAPreferredBackend() {
     // which initialize the backend without calling the setter
     // Perform validity checking
     static const bool hasCKSDPAFlag = hasCKSDPA();
-    static const bool ckSupportedFlag = ckSupported();
-    if(!(hasCKSDPAFlag && ckSupportedFlag)){
+    static const bool ckSDPASupportedFlag = ckSDPASupported();
+    if(!(hasCKSDPAFlag && ckSDPASupportedFlag)){
       TORCH_WARN_ONCE(
         "Cannot set preferred SDPA backend to CK since following conditions are not true: ",
-        "architecture supported for CK: ", ckSupportedFlag,
+        "architecture supported for CK SDPA: ", ckSDPASupportedFlag,
         ", PyTorch built with CK SDPA support: ", hasCKSDPAFlag);
       rocm_fa_preferred_backend = at::ROCmFABackend::AOTriton;
     }
@@ -585,10 +603,10 @@ at::ROCmFABackend Context::getROCmFAPreferredBackend() {
 void Context::setROCmFAPreferredBackend(at::ROCmFABackend b) {
 #ifdef USE_ROCM
   static const bool hasCKSDPAFlag = hasCKSDPA();
-  static const bool ckSupportedFlag = ckSupported();
-  TORCH_CHECK((b != at::ROCmFABackend::Ck) || (hasCKSDPAFlag && ckSupportedFlag),
+  static const bool ckSDPASupportedFlag = ckSDPASupported();
+  TORCH_CHECK((b != at::ROCmFABackend::Ck) || (hasCKSDPAFlag && ckSDPASupportedFlag),
       "Cannot set preferred SDPA backend to CK since following conditions are not true: ",
-      "architecture supported for CK: ", ckSupportedFlag,
+      "architecture supported for CK SDPA: ", ckSDPASupportedFlag,
       ", PyTorch built with CK SDPA support: ", hasCKSDPAFlag);
 #endif
   rocm_fa_preferred_backend = b;
