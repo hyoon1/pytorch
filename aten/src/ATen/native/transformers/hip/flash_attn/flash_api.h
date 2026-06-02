@@ -335,7 +335,8 @@ mha_varlen_fwd(
     std::optional<at::Generator> gen_) {
 #if defined(USE_ROCM_CK_SDPA)
   if (at::globalContext().getROCmFAPreferredBackend() ==
-      at::ROCmFABackend::Ck) {
+          at::ROCmFABackend::Ck &&
+      q.size(-1) <= 256) {
     std::optional<at::Tensor> dummy_attn_bias = std::nullopt;
     const int non_null_window_left = window_size_left.value_or(-1);
     const int non_null_window_right = window_size_right.value_or(-1);
@@ -409,7 +410,8 @@ inline std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> mha_bwd(
 
 #if defined(USE_ROCM_CK_SDPA)
   if (at::globalContext().getROCmFAPreferredBackend() ==
-      at::ROCmFABackend::Ck) {
+          at::ROCmFABackend::Ck &&
+      q.size(-1) <= 256) {
     std::optional<at::Tensor> non_null_dbias = std::nullopt;
     const int non_null_window_left = window_size_left.value_or(-1);
     const int non_null_window_right = window_size_right.value_or(-1);
@@ -496,7 +498,8 @@ inline std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> mha_varlen_bwd
     const at::Tensor philox_offset) {
 #if defined(USE_ROCM_CK_SDPA)
   if (at::globalContext().getROCmFAPreferredBackend() ==
-      at::ROCmFABackend::Ck) {
+          at::ROCmFABackend::Ck &&
+      q.size(-1) <= 256) {
     std::optional<at::Tensor> non_null_dbias = std::nullopt;
     const int non_null_window_left = window_size_left.value_or(-1);
     const int non_null_window_right = window_size_right.value_or(-1);

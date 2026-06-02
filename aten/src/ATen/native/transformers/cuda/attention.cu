@@ -125,7 +125,8 @@ mha_fwd(
     std::optional<at::Generator> gen_) {
 #if defined(USE_ROCM_CK_SDPA)
   if (at::globalContext().getROCmFAPreferredBackend() ==
-      at::ROCmFABackend::Ck) {
+          at::ROCmFABackend::Ck &&
+      q.size(-1) <= 256) {
     const int non_null_window_left = window_size_left.value_or(-1);
     const int non_null_window_right = window_size_right.value_or(-1);
     std::optional<at::Tensor> dummy_attn_bias = std::nullopt;
@@ -1512,7 +1513,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor, c10::SymInt, c10::SymInt> _efficient_
   res = at::empty({B, M, num_heads, Kv}, query.options());
 
   if(at::globalContext().getROCmFAPreferredBackend() ==
-    at::ROCmFABackend::Ck) {
+         at::ROCmFABackend::Ck &&
+     query.size(-1) <= 256) {
 
 #if defined(USE_ROCM_CK_SDPA)
     std::optional<Tensor> out(res);
