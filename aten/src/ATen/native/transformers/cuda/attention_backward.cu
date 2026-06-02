@@ -496,9 +496,13 @@ _efficient_attention_backward(
 
 #ifdef USE_ROCM
   // ROCM Implementation
-  if(at::globalContext().getROCmFAPreferredBackend() == at::ROCmFABackend::Ck &&
-     query.size(-1) <= 256)
-  {
+  const bool can_use_ck =
+      at::globalContext().getROCmFAPreferredBackend() == at::ROCmFABackend::Ck &&
+      query.size(-1) <= 256 &&
+      (query.scalar_type() == at::ScalarType::Half ||
+       query.scalar_type() == at::ScalarType::BFloat16) &&
+      !cu_seqlens_q.has_value();
+  if (can_use_ck) {
 #if defined(USE_ROCM_CK_SDPA)
     const auto my_softmax_scale = sdp::calculate_scale(query, scale).expect_float();
     // Store grad_bias in optional

@@ -1512,9 +1512,13 @@ std::tuple<Tensor, Tensor, Tensor, Tensor, c10::SymInt, c10::SymInt> _efficient_
   const auto softmax_scale = sdp::calculate_scale(query, scale).expect_float();
   res = at::empty({B, M, num_heads, Kv}, query.options());
 
-  if(at::globalContext().getROCmFAPreferredBackend() ==
-         at::ROCmFABackend::Ck &&
-     query.size(-1) <= 256) {
+  const bool can_use_ck =
+      at::globalContext().getROCmFAPreferredBackend() == at::ROCmFABackend::Ck &&
+      query.size(-1) <= 256 &&
+      (query.scalar_type() == at::ScalarType::Half ||
+       query.scalar_type() == at::ScalarType::BFloat16) &&
+      !seqstart_q.has_value();
+  if (can_use_ck) {
 
 #if defined(USE_ROCM_CK_SDPA)
     std::optional<Tensor> out(res);

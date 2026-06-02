@@ -928,8 +928,9 @@ bool can_use_mem_efficient_attention(sdp_params const& params, bool debug) {
       return false;
     }
   }
-  if(at::globalContext().getROCmFAPreferredBackend() == at::ROCmFABackend::Ck) {
-    return check_tensor_dtype(params, ck_mem_efficient_dtypes, debug);
+  if (at::globalContext().getROCmFAPreferredBackend() == at::ROCmFABackend::Ck &&
+      check_tensor_dtype(params, ck_mem_efficient_dtypes, false)) {
+    return true;
   }
   return check_tensor_dtype(params, aotriton_mem_efficient_dtypes, debug);
 #else
