@@ -5,6 +5,7 @@ import os
 import typing
 import unittest
 import unittest.mock
+from pathlib import Path
 
 import tools.setup_helpers.cmake
 import tools.setup_helpers.env  # noqa: F401 unused but resolves circular import
@@ -18,6 +19,41 @@ T = typing.TypeVar("T")
 
 
 class TestCMake(unittest.TestCase):
+    def test_ck_sdpa_fav3_is_arch_gated(self) -> None:
+        cmake = (
+            Path(__file__).resolve().parents[2]
+            / "aten/src/ATen/CMakeLists.txt"
+        ).read_text()
+
+        fav3_add = "add_subdirectory(native/transformers/hip/flash_attn/ck/fav_v3)"
+        fav3_target = "hip_add_library(ck_sdpa_fav3 STATIC"
+        fav3_link = "target_link_libraries(ck_sdpa PRIVATE ck_sdpa_fav3)"
+        fav3_filter = (
+            'list(FILTER CK_SDPA_FAV3_TARGETS INCLUDE REGEX "^gfx(942|950)$")'
+        )
+        fav3_arch_flags = (
+            "list(APPEND CK_SDPA_FAV3_HIP_CLANG_FLAGS --offload-arch=${ARCH})"
+        )
+
+        self.assertIn(fav3_filter, cmake)
+        self.assertIn(fav3_add, cmake)
+        self.assertIn(fav3_target, cmake)
+        self.assertIn(fav3_link, cmake)
+        self.assertIn(fav3_arch_flags, cmake)
+
+        gate_pos = cmake.index("set(CK_SDPA_FAV3_TARGETS")
+        add_pos = cmake.index(fav3_add)
+        target_pos = cmake.index(fav3_target)
+
+        self.assertLess(gate_pos, add_pos)
+        self.assertLess(add_pos, target_pos)
+
+        ck_sdpa_sources = cmake[
+            cmake.index("file(GLOB ck_sdpa_sources_hip"):
+            cmake.index("set_source_files_properties(${ck_sdpa_sources_hip}")
+        ]
+        self.assertNotIn("fav_v3", ck_sdpa_sources)
+
     @unittest.mock.patch("multiprocessing.cpu_count")
     def test_build_jobs(self, mock_cpu_count: unittest.mock.MagicMock) -> None:
         """Tests that the number of build jobs comes out correctly."""

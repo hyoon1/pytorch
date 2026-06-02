@@ -282,11 +282,18 @@ if(USE_FLASH_ATTENTION)
 
     message(STATUS "Generating CK kernel instances...")
     add_subdirectory(native/transformers/hip/flash_attn/ck)
-    # FAv3 Generation
-    add_subdirectory(native/transformers/hip/flash_attn/ck/fav_v3)
+    set(CK_SDPA_FAV3_TARGETS ${PYTORCH_ROCM_ARCH})
+    list(FILTER CK_SDPA_FAV3_TARGETS INCLUDE REGEX "^gfx(942|950)$")
+    list(REMOVE_DUPLICATES CK_SDPA_FAV3_TARGETS)
+    if(CK_SDPA_FAV3_TARGETS)
+      list(JOIN CK_SDPA_FAV3_TARGETS "," CK_SDPA_FAV3_TARGETS_ARG)
+      message(STATUS "Generating CK SDPA FAv3 kernels for targets: ${CK_SDPA_FAV3_TARGETS_ARG}")
+      add_subdirectory(native/transformers/hip/flash_attn/ck/fav_v3)
+    else()
+      message(STATUS "Skipping CK SDPA FAv3 kernels; supported targets are gfx942/gfx950")
+    endif()
     file(GLOB ck_sdpa_sources_hip
-         "native/transformers/hip/flash_attn/ck/*.hip"
-         "native/transformers/hip/flash_attn/ck/fav_v3/*.hip")
+         "native/transformers/hip/flash_attn/ck/*.hip")
 
     set_source_files_properties(${ck_sdpa_sources_hip} PROPERTIES HIP_SOURCE_PROPERTY_FORMAT 1)
     hip_add_library(ck_sdpa STATIC
@@ -294,7 +301,10 @@ if(USE_FLASH_ATTENTION)
                     HIPCC_OPTIONS ${HIP_HCC_FLAGS} ${CK_SDPA_EXTRA_HIPCC_FLAGS})
     set_target_properties(ck_sdpa PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(ck_sdpa PUBLIC ${CK_SDPA_EXTRA_HIPCC_OPTIONS})
-    target_compile_definitions(ck_sdpa PRIVATE AITER_EMBEDDED_HSA_HEADER="aiter_embedded_hsa.h")
+    if(CK_SDPA_FAV3_TARGETS)
+      target_compile_definitions(ck_sdpa PRIVATE
+                                 USE_ROCM_CK_SDPA_FAV3)
+    endif()
     target_include_directories(ck_sdpa PUBLIC
                                ${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/composable_kernel/include
                                ${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/composable_kernel/library/include
@@ -302,8 +312,37 @@ if(USE_FLASH_ATTENTION)
                                ${CMAKE_CURRENT_BINARY_DIR}/composable_kernel
                                ${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/aiter/csrc/include
                                ${CMAKE_CURRENT_SOURCE_DIR}/native/transformers/hip/flash_attn/ck
-                               ${AITER_EMBEDDED_HSA_HEADER_DIR}
                                )
+    if(CK_SDPA_FAV3_TARGETS)
+      file(GLOB ck_sdpa_fav3_sources_hip
+           "native/transformers/hip/flash_attn/ck/fav_v3/*.hip")
+      set_source_files_properties(${ck_sdpa_fav3_sources_hip} PROPERTIES HIP_SOURCE_PROPERTY_FORMAT 1)
+
+      set(HIP_CLANG_FLAGS_ORIGINAL ${HIP_CLANG_FLAGS})
+      string(REGEX REPLACE "--offload-arch=[^ ]*" "" CK_SDPA_FAV3_HIP_CLANG_FLAGS "${HIP_CLANG_FLAGS}")
+      foreach(ARCH ${CK_SDPA_FAV3_TARGETS})
+        list(APPEND CK_SDPA_FAV3_HIP_CLANG_FLAGS --offload-arch=${ARCH})
+      endforeach()
+      set(HIP_CLANG_FLAGS ${CK_SDPA_FAV3_HIP_CLANG_FLAGS})
+      hip_add_library(ck_sdpa_fav3 STATIC
+                      ${ck_sdpa_fav3_sources_hip}
+                      HIPCC_OPTIONS ${HIP_HCC_FLAGS} ${CK_SDPA_EXTRA_HIPCC_FLAGS})
+      set(HIP_CLANG_FLAGS ${HIP_CLANG_FLAGS_ORIGINAL})
+      set_target_properties(ck_sdpa_fav3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+      target_compile_definitions(ck_sdpa_fav3 PRIVATE ${CK_SDPA_EXTRA_HIPCC_OPTIONS})
+      target_compile_definitions(ck_sdpa_fav3 PRIVATE
+                                 AITER_EMBEDDED_HSA_HEADER="aiter_embedded_hsa.h"
+                                 ONLY_FAV3=1)
+      target_include_directories(ck_sdpa_fav3 PRIVATE
+                                 ${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/composable_kernel/include
+                                 ${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/composable_kernel/library/include
+                                 ${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/composable_kernel/example/ck_tile/01_fmha
+                                 ${CMAKE_CURRENT_BINARY_DIR}/composable_kernel
+                                 ${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/aiter/csrc/include
+                                 ${CMAKE_CURRENT_SOURCE_DIR}/native/transformers/hip/flash_attn/ck
+                                 ${AITER_EMBEDDED_HSA_HEADER_DIR})
+      target_link_libraries(ck_sdpa PRIVATE ck_sdpa_fav3)
+    endif()
 
   endif()
   file(GLOB flash_attention_hip_aot_hip "native/transformers/hip/flash_attn/aot/*.hip")

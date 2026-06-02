@@ -1,8 +1,18 @@
 include(CMakePrintHelpers)
 
+if(NOT CK_SDPA_FAV3_TARGETS)
+    message(FATAL_ERROR "CK SDPA FAv3 requires gfx942 or gfx950 in PYTORCH_ROCM_ARCH")
+endif()
+
+list(JOIN CK_SDPA_FAV3_TARGETS ";" CK_SDPA_FAV3_TARGETS_ARG)
+set(AITER_FAV3_HSA_SUBDIRS)
+foreach(ARCH ${CK_SDPA_FAV3_TARGETS})
+    list(APPEND AITER_FAV3_HSA_SUBDIRS "${ARCH}/fmha_v3_bwd")
+endforeach()
+
 # Generate AITER/CK Asm code
 execute_process(
-    COMMAND ${CMAKE_COMMAND} -E env "AITER_GPU_ARCHS=gfx942;gfx950"
+    COMMAND ${CMAKE_COMMAND} -E env "AITER_GPU_ARCHS=${CK_SDPA_FAV3_TARGETS_ARG}"
             python3 ${CMAKE_SOURCE_DIR}/third_party/aiter/hsa/codegen.py -m fmha_v3_bwd --output_dir ${CMAKE_CURRENT_LIST_DIR}
     RESULT_VARIABLE ret
 )
@@ -26,7 +36,7 @@ execute_process(
     COMMAND python3 ${GENERATE_SCRIPT}
             --hsa-dir ${AITER_HSA_DIR}
             --output ${AITER_EMBEDDED_HSA_HEADER}
-            --subdirs gfx942/fmha_v3_bwd gfx950/fmha_v3_bwd
+            --subdirs ${AITER_FAV3_HSA_SUBDIRS}
     RESULT_VARIABLE ret
 )
 
