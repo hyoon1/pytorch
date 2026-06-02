@@ -436,10 +436,12 @@ mha_varlen_bwd_ck(const at::Tensor &dout,                   // total_q x num_hea
     }
 
     uint64_t drop_seed = 1, drop_offset = 0;
-
-    drop_seed = *philox_seed.data_ptr<uint64_t>();
-    drop_offset = *philox_offset.data_ptr<uint64_t>();
     auto drop_seed_offset = std::make_pair(&drop_seed, &drop_offset);
+    if (is_dropout) {
+        drop_seed_offset = std::make_pair(
+            reinterpret_cast<uint64_t*>(philox_seed.data_ptr<int64_t>()),
+            reinterpret_cast<uint64_t*>(philox_offset.data_ptr<int64_t>()));
+    }
 
     if (max_seqlen_q > 0) {
         ck_tile::stream_config stream_config{stream};

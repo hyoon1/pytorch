@@ -404,10 +404,14 @@ mha_varlen_fwd_ck(const at::Tensor &q,                   // total_q x num_heads 
         if (out_.has_value()) { out_.value().copy_(out); }
     }
 
-    //return kludge -- TODO:: REMOVE
-    at::Tensor seed_t = at::empty({}, at::dtype(at::kLong));
-    at::Tensor offset_t = at::empty({}, at::dtype(at::kLong));
-
-    return {out, q_padded, k_padded, v_padded, softmax_lse, seed_t, offset_t, p};
+    return {
+        out,
+        q_padded,
+        k_padded,
+        v_padded,
+        softmax_lse,
+        rng_state.select(0, 0),
+        rng_state.select(0, 1),
+        p};
 }
 }
