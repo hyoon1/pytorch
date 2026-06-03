@@ -10,6 +10,7 @@
 #include <mask.hpp>
 
 #include <memory>
+#include <variant>
 
 namespace pytorch_flash {
 
@@ -70,7 +71,8 @@ fmha_bwd_args get_ck_fmha_bwd_args(const mask_info &mask,
                                    at::Tensor dv,
                                    float softmax_scale,
                                    float p_dropout,
-                                   std::pair<uint64_t, uint64_t> drop_seed_offset)
+                                   std::variant<std::pair<uint64_t, uint64_t>, std::pair<const void*, const void*>>
+                                       drop_seed_offset)
 {
     // q: (batch_size, seqlen_q, nheads, hdim)
     ck_tile::index_t batch_stride_q = q.stride(0);
@@ -530,10 +532,19 @@ mha_bwd_ck(const at::Tensor &dout,                   // batch_size x seqlen_q x 
         dv_expanded = dv;
     }
 
-    uint64_t drop_seed = 1, drop_offset = 0;
+    std::variant<std::pair<uint64_t, uint64_t>, std::pair<const void*, const void*>>
+        drop_seed_offset = std::make_pair(uint64_t(1), uint64_t(0));
     if (is_dropout) {
-        drop_seed = static_cast<uint64_t>(*philox_seed.data_ptr<int64_t>());
-        drop_offset = static_cast<uint64_t>(*philox_offset.data_ptr<int64_t>());
+        if (philox_seed.is_cuda()) {
+            drop_seed_offset = std::make_pair(
+                static_cast<const void*>(philox_seed.data_ptr<int64_t>()),
+                static_cast<const void*>(philox_offset.data_ptr<int64_t>()));
+        }
+        else {
+            drop_seed_offset = std::make_pair(
+                static_cast<uint64_t>(*philox_seed.data_ptr<int64_t>()),
+                static_cast<uint64_t>(*philox_offset.data_ptr<int64_t>()));
+        }
     }
     at::Tensor workspace;
 
@@ -577,7 +588,7 @@ mha_bwd_ck(const at::Tensor &dout,                   // batch_size x seqlen_q x 
                     dk_expanded,
                     dv_expanded,
                     softmax_scale,
-                    std::make_pair(drop_seed, drop_offset));
+                    std::make_pair(uint64_t(1), uint64_t(0)));
             t = aiter::mha_bwd(fav3_args, stream_config);
         }
         if (t < 0.0f)
@@ -643,7 +654,7 @@ mha_bwd_ck(const at::Tensor &dout,                   // batch_size x seqlen_q x 
                     dv_expanded,
                     softmax_scale,
                     p_dropout,
-                    std::make_pair(drop_seed, drop_offset));
+                    drop_seed_offset);
 
             t = launcher.run(args, stream_config);
         }

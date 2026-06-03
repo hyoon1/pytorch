@@ -3,6 +3,7 @@
  ******************************************************************************/
 
 #include <ATen/native/transformers/hip/flash_attn/flash_common_hip.hpp>
+#include <ATen/native/transformers/hip/flash_attn/ck/mha_dropout_mask_utils.h>
 #include <ATen/native/transformers/hip/flash_attn/ck/mha_fwd_head_grouping_utils.h>
 #include <fmha_fwd.hpp>
 #include <mask.hpp>
@@ -59,7 +60,7 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
 
     // attn_bias :(batch, nheads, max_seqlen_q, max_seqlen_k)
     // lse: (nheads, total_q)
-    // randval: (nheads, total_q, max_seqlen_k)
+    // randval: (batch_size, nheads, max_seqlen_q, max_seqlen_k)
 
     ck_tile::index_t total_q = q.size(0);
     ck_tile::index_t total_k = k.size(0);
@@ -68,14 +69,14 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
     ck_tile::index_t stride_k = k.stride(0);
     ck_tile::index_t stride_v = v.stride(0);
     ck_tile::index_t stride_o = out.stride(0);
-    ck_tile::index_t stride_randval = has_dropout_randval ? dropout_randval.stride(1) : 0;
+    ck_tile::index_t stride_randval = has_dropout_randval ? dropout_randval.stride(2) : 0;
 
     ck_tile::index_t nhead_stride_q = q.stride(1);
     ck_tile::index_t nhead_stride_k = k.stride(1);
     ck_tile::index_t nhead_stride_v = v.stride(1);
     ck_tile::index_t nhead_stride_o = out.stride(1);
     ck_tile::index_t nhead_stride_lse = has_lse ? softmax_lse.stride(0) : 0;
-    ck_tile::index_t nhead_stride_randval = has_dropout_randval ? dropout_randval.stride(0) : 0;
+    ck_tile::index_t nhead_stride_randval = has_dropout_randval ? dropout_randval.stride(1) : 0;
 
     ck_tile::index_t batch_stride_q = 0;
     ck_tile::index_t batch_stride_k = 0;
@@ -83,7 +84,7 @@ fmha_fwd_args get_ck_fmha_varlen_fwd_args(bool has_lse,
     ck_tile::index_t batch_stride_o = 0;
 
     ck_tile::index_t batch_stride_lse = 0;
-    ck_tile::index_t batch_stride_randval = 0;
+    ck_tile::index_t batch_stride_randval = has_dropout_randval ? dropout_randval.stride(0) : 0;
 
     void *attn_bias_ptr = nullptr;
     ck_tile::index_t stride_attn_bias = 0;
@@ -306,17 +307,21 @@ mha_varlen_fwd_ck(const at::Tensor &q,                   // total_q x num_heads 
     // TODO - check gradient, only training require lse
     softmax_lse = at::empty({num_heads, total_q}, opts.dtype(at::kFloat));
 
-    at::Tensor p;
+    at::Tensor dropout_randval;
     if (return_dropout_randval) {
         TORCH_CHECK(has_dropout, "return_dropout_randval require p_dropout > 0");
-        p = at::empty({num_heads, total_q, max_seqlen_k}, opts.dtype(at::kByte));
+        dropout_randval =
+            at::empty({batch_size, num_heads, max_seqlen_q, max_seqlen_k}, opts.dtype(at::kByte));
+    }
+    else {
+        dropout_randval = at::empty({0}, opts.dtype(at::kByte));
     }
 
     if (zero_tensors)
     {
         out.zero_();
         softmax_lse.fill_(-std::numeric_limits<float>::infinity());
-        if (return_dropout_randval) {p.zero_();}
+        if (return_dropout_randval) {dropout_randval.zero_();}
     }
 
     int64_t counter_offset = batch_size * num_heads * ck_tile::get_warp_size();
@@ -367,7 +372,7 @@ mha_varlen_fwd_ck(const at::Tensor &q,                   // total_q x num_heads 
                 attn_bias,
                 out,
                 softmax_lse,
-                p,
+                dropout_randval,
                 softmax_scale,
                 p_dropout,
                 drop_seed_offset);
@@ -404,6 +409,10 @@ mha_varlen_fwd_ck(const at::Tensor &q,                   // total_q x num_heads 
         if (out_.has_value()) { out_.value().copy_(out); }
     }
 
+    auto encoded_softmax = return_dropout_randval
+        ? ck_encode_dropout_randval(dropout_randval, p_dropout, opts)
+        : at::empty({0, 0, 0, 0}, opts);
+
     return {
         out,
         q_padded,
@@ -412,6 +421,6 @@ mha_varlen_fwd_ck(const at::Tensor &q,                   // total_q x num_heads 
         softmax_lse,
         rng_state.select(0, 0),
         rng_state.select(0, 1),
-        p};
+        encoded_softmax};
 }
 }

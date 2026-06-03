@@ -3,6 +3,7 @@
  ******************************************************************************/
 
 #include <ATen/native/transformers/hip/flash_attn/flash_common_hip.hpp>
+#include <ATen/native/transformers/hip/flash_attn/ck/mha_dropout_mask_utils.h>
 #include <ATen/native/transformers/hip/flash_attn/ck/mha_fwd_head_grouping_utils.h>
 #include <fmha_fwd.hpp>
 #include <mask.hpp>
@@ -294,13 +295,13 @@ mha_fwd_ck(const at::Tensor &q,                      // batch_size x seqlen_q x 
     // TODO - check gradient, only training require lse
     softmax_lse = at::empty({batch_size, num_heads, seqlen_q}, opts.dtype(at::kFloat));
 
-    at::Tensor p;
+    at::Tensor dropout_randval;
     if (return_dropout_randval) {
         TORCH_CHECK(has_dropout, "return_dropout_randval require p_dropout > 0");
-        p = at::empty({batch_size, num_heads, seqlen_q, seqlen_k}, opts.dtype(at::kByte));
+        dropout_randval = at::empty({batch_size, num_heads, seqlen_q, seqlen_k}, opts.dtype(at::kByte));
     }
     else {
-        p = at::empty({ 0 }, opts);
+        dropout_randval = at::empty({ 0 }, opts.dtype(at::kByte));
     }
 
     int64_t counter_offset = batch_size * num_heads * ck_tile::get_warp_size();
@@ -323,8 +324,8 @@ mha_fwd_ck(const at::Tensor &q,                      // batch_size x seqlen_q x 
 
         hipLaunchKernelGGL(
             flash::ParsePhiloxCudaState, dim3(1), dim3(64), 0, at::cuda::getCurrentCUDAStream(), philox_args, rng_state_ptr);
-        seed_t = at::scalar_tensor(at::Scalar(static_cast<uint64_t>(rng_state_ptr[0])), at::dtype(at::kLong));
-        offset_t = at::scalar_tensor(at::Scalar(static_cast<uint64_t>(rng_state_ptr[1])), at::dtype(at::kLong));
+        seed_t = rng_state.select(0, 0);
+        offset_t = rng_state.select(0, 1);
     }
     else
     {
@@ -369,7 +370,7 @@ mha_fwd_ck(const at::Tensor &q,                      // batch_size x seqlen_q x 
                 attn_bias,
                 out,
                 softmax_lse,
-                p,
+                dropout_randval,
                 softmax_scale,
                 p_dropout,
                 drop_seed_offset);
@@ -405,6 +406,9 @@ mha_fwd_ck(const at::Tensor &q,                      // batch_size x seqlen_q x 
         q_padded = q_padded.transpose(1, 2).reshape({batch_size, 1, num_heads_k * seqlen_q, head_size});
         softmax_lse = softmax_lse.reshape({batch_size, num_heads_k * seqlen_q, 1});
     }
-    return {out, q_padded, k_padded, v_padded, softmax_lse, seed_t, offset_t, p};
+    auto encoded_softmax = return_dropout_randval
+        ? ck_encode_dropout_randval(dropout_randval, p_dropout, opts)
+        : at::empty({0, 0, 0, 0}, opts);
+    return {out, q_padded, k_padded, v_padded, softmax_lse, seed_t, offset_t, encoded_softmax};
 }
 } //namespace pytorch_flash
